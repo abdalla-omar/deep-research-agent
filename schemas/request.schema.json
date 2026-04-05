@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResearchRequest",
+  "type": "object",
+  "required": ["query"],
+  "properties": {
+    "query": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 4000
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 128
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "max_context_tokens_per_call": {"type": "integer", "default": 2000},
+        "max_session_cost_usd": {"type": "number", "default": 0.05},
+        "max_runtime_seconds": {"type": "integer", "default": 480}
+      },
+      "additionalProperties": false
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "depth": {"type": "string", "enum": ["low", "medium", "high"], "default": "medium"},
+        "citations_required": {"type": "boolean", "default": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

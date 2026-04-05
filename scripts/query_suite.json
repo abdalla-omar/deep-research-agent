@@ -1,0 +1,7 @@
+[
+  "Compare vector RAG, summary cascades, and episodic memory for deep research agents under strict token limits.",
+  "Design an architecture for a constrained-cost research agent that must produce citations and uncertainty disclosures.",
+  "What are robust strategies to avoid hallucinations in retrieval-heavy research workflows with budget ceilings?",
+  "How should a team evaluate faithfulness, relevancy, and cost trade-offs for enterprise research copilots?",
+  "Propose a rollout and observability plan for deploying a memory-constrained deep research system in production."
+]

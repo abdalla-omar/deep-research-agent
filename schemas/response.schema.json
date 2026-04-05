@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResearchResponse",
+  "type": "object",
+  "required": [
+    "answer_markdown",
+    "citations",
+    "query_breakdown",
+    "budget_report",
+    "trace"
+  ],
+  "properties": {
+    "answer_markdown": {"type": "string"},
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["claim_id", "url", "title", "confidence"],
+        "properties": {
+          "claim_id": {"type": "string"},
+          "url": {"type": "string", "format": "uri"},
+          "title": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    },
+    "query_breakdown": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "budget_report": {
+      "type": "object",
+      "required": ["total_tokens", "total_cost_usd", "max_context_tokens_seen", "constraint_violations"],
+      "properties": {
+        "total_tokens": {"type": "integer"},
+        "total_cost_usd": {"type": "number"},
+        "max_context_tokens_seen": {"type": "integer"},
+        "constraint_violations": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "trace": {
+      "type": "object",
+      "required": ["subquestions_processed", "evidence_cards_created", "degrade_mode_triggered"],
+      "properties": {
+        "subquestions_processed": {"type": "integer"},
+        "evidence_cards_created": {"type": "integer"},
+        "degrade_mode_triggered": {"type": "boolean"}
+      }
+    }
+  },
+  "additionalProperties": false
+}

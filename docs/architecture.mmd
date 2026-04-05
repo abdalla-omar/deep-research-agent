@@ -1,0 +1,13 @@
+flowchart LR
+  A[Webhook Trigger] --> B[Session Init + Constraint Ledger]
+  B --> C[Question Decomposer]
+  C --> D[Budget Governor]
+  D --> E[Multi-Query Retrieval (Tavily)]
+  E --> F[Rerank + Compression]
+  F --> G[Evidence Card Store]
+  G --> H[Memory Compactor<br/>(working + summary + episodic)]
+  H --> I[Context Pack Builder<br/>(knapsack)]
+  I --> J[Final Synthesizer]
+  J --> K[Faithfulness Verifier]
+  K --> L[Repair Pass (optional)]
+  L --> M[Response Formatter + Budget Report]

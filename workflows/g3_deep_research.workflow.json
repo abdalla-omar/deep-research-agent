@@ -1,0 +1,203 @@
+{
+  "name": "G3 Deep Research Agent (Constraint-Aware)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "research",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1120,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json.body || $json;\nconst query = String(payload.query || '').trim();\nif (!query) throw new Error('query is required');\n\nconst constraints = payload.constraints || {};\nconst options = payload.options || {};\n\nconst ledger = {\n  session_id: payload.session_id || crypto.randomUUID(),\n  started_at: new Date().toISOString(),\n  max_context_tokens_per_call: Number(constraints.max_context_tokens_per_call || $env.MAX_CONTEXT_TOKENS_PER_CALL || 2000),\n  max_session_cost_usd: Number(constraints.max_session_cost_usd || $env.MAX_SESSION_COST_USD || 0.05),\n  max_runtime_seconds: Number(constraints.max_runtime_seconds || $env.MAX_RUNTIME_SECONDS || 480),\n  total_tokens: 0,\n  total_cost_usd: 0,\n  max_context_tokens_seen: 0,\n  degrade_mode: false,\n  constraint_violations: []\n};\n\nreturn [{\n  json: {\n    query,\n    options: {\n      depth: options.depth || 'medium',\n      citations_required: options.citations_required !== false\n    },\n    ledger,\n    trace: {\n      subquestions_processed: 0,\n      evidence_cards_created: 0,\n      degrade_mode_triggered: false\n    },\n    memory: {\n      working_memory: [],\n      summary_memory: '',\n      evidence_cards: []\n    }\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Session Init",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst q = data.query;\nconst depth = data.options.depth;\n\nconst sub = [\n  'Define the problem space and evaluation criteria for: ' + q,\n  'Collect current evidence, benchmarks, and implementation patterns for: ' + q,\n  'Synthesize trade-offs, constraints, and recommended approach for: ' + q\n];\nif (depth === 'high') {\n  sub.push('Identify failure modes and mitigation strategies for: ' + q);\n  sub.push('Estimate cost, latency, and operational implications for: ' + q);\n}\n\ndata.query_breakdown = sub;\nreturn [{ json: data }];"
+      },
+      "id": "3",
+      "name": "Question Decomposer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst tavilyApiKey = $env.TAVILY_API_KEY || '';\n\nfunction estimateTokens(text) { return Math.max(1, Math.ceil(String(text || '').length / 4)); }\nfunction shortId(str) {\n  let h = 0;\n  for (let i = 0; i < str.length; i++) h = ((h << 5) - h) + str.charCodeAt(i);\n  return Math.abs(h).toString(16).slice(0, 12);\n}\nfunction scoreSourceQuality(url) {\n  const d = String(url || '');\n  if (d.includes('arxiv.org') || d.includes('github.com') || d.includes('docs.') || d.includes('.gov') || d.includes('.edu')) return 0.9;\n  return 0.6;\n}\nasync function tavilySearch(query, topK) {\n  if (!tavilyApiKey) {\n    return [\n      { title: 'Open source deep research patterns', url: 'https://example.com/deep-research-patterns', content: 'Multi-query retrieval and compression improve answer quality while controlling context size.' },\n      { title: 'RAG memory architecture', url: 'https://example.com/rag-memory', content: 'Hybrid memory combines short-term working memory with episodic vector storage and summary memory.' },\n      { title: 'Cost-aware LLM orchestration', url: 'https://example.com/cost-aware-orchestration', content: 'A budget governor enforces token and dollar limits, using degrade modes before hard stop.' }\n    ].slice(0, topK);\n  }\n\n  const response = await fetch('https://api.tavily.com/search', {\n    method: 'POST',\n    headers: {\n      Authorization: 'Bearer ' + tavilyApiKey,\n      'Content-Type': 'application/json'\n    },\n    body: JSON.stringify({\n      query,\n      search_depth: 'advanced',\n      max_results: topK,\n      include_answer: false,\n      include_raw_content: true\n    })\n  });\n  if (!response.ok) throw new Error('Tavily error: ' + response.status);\n  const payload = await response.json();\n  return payload.results || [];\n}\n\nlet topK = data.options.depth === 'high' ? 6 : (data.options.depth === 'low' ? 3 : 5);\nif (data.ledger.degrade_mode) topK = Math.max(2, topK - 2);\n\nconst elapsed = (Date.now() - Date.parse(data.ledger.started_at)) / 1000;\nif (elapsed > data.ledger.max_runtime_seconds) {\n  data.ledger.constraint_violations.push('runtime exceeded ' + data.ledger.max_runtime_seconds + 's');\n  data.ledger.degrade_mode = true;\n  data.trace.degrade_mode_triggered = true;\n}\n\nconst evidenceCards = [];\nfor (let i = 0; i < data.query_breakdown.length; i++) {\n  const sq = data.query_breakdown[i];\n  const subId = 'sq-' + (i + 1);\n  const variants = [sq, sq + ' best practices', sq + ' trade-offs and benchmarks'];\n\n  let merged = [];\n  for (const variant of variants) {\n    const projectedIn = estimateTokens(variant);\n    const projectedCost = (projectedIn / 1000000) * 0.50;\n\n    if (data.ledger.total_cost_usd + projectedCost > data.ledger.max_session_cost_usd) {\n      data.ledger.degrade_mode = true;\n      data.trace.degrade_mode_triggered = true;\n      data.ledger.constraint_violations.push('degrade-mode: retrieval projected cost over budget');\n      break;\n    }\n\n    const results = await tavilySearch(variant, topK);\n    merged = merged.concat(results);\n\n    data.ledger.total_tokens += projectedIn + Math.min(120, results.length * 30);\n    data.ledger.total_cost_usd += projectedCost;\n    data.ledger.max_context_tokens_seen = Math.max(data.ledger.max_context_tokens_seen, projectedIn);\n  }\n\n  const slice = merged.slice(0, topK);\n  for (let j = 0; j < slice.length; j++) {\n    const r = slice[j] || {};\n    const content = String(r.content || '').trim();\n    const title = String(r.title || 'Untitled source').trim();\n    const url = String(r.url || 'https://example.com/unknown').trim();\n    const claim = String((content.split('.')[0] || ('Finding ' + (j + 1) + ' for ' + sq))).slice(0, 240);\n\n    evidenceCards.push({\n      id: shortId(data.ledger.session_id + '|' + subId + '|' + j + '|' + url),\n      session_id: data.ledger.session_id,\n      subquestion_id: subId,\n      claim_candidate: claim,\n      supporting_excerpt: content.slice(0, 900),\n      source_url: url,\n      source_title: title,\n      retrieval_score: Math.max(0.2, 1.0 - j * 0.12),\n      source_quality: scoreSourceQuality(url),\n      recency_score: 0.5,\n      novelty_score: Math.max(0.3, 0.9 - j * 0.08),\n      estimated_tokens: estimateTokens(claim + '\n' + content),\n      timestamp: new Date().toISOString()\n    });\n  }\n\n  data.memory.working_memory.push({\n    subquestion_id: subId,\n    text: sq,\n    card_count: slice.length,\n    timestamp: new Date().toISOString()\n  });\n\n  data.trace.subquestions_processed += 1;\n  data.trace.evidence_cards_created += slice.length;\n}\n\ndata.memory.evidence_cards = evidenceCards;\nreturn [{ json: data }];"
+      },
+      "id": "4",
+      "name": "Retriever + Evidence Store",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nfunction estimateTokens(text) { return Math.max(1, Math.ceil(String(text || '').length / 4)); }\nfunction utility(c) {\n  return 0.45 * c.retrieval_score + 0.25 * c.novelty_score + 0.20 * c.source_quality + 0.10 * c.recency_score;\n}\n\nconst cards = data.memory.evidence_cards || [];\nfor (let i = 0; i < cards.length; i += 2) {\n  const window = cards.slice(i, i + 2);\n  if (!window.length) continue;\n  const fragment = window.map(c => '- [' + c.id + '] ' + c.claim_candidate + ' (src: ' + c.source_title + ')').join('\n');\n  data.memory.summary_memory = data.memory.summary_memory ? (data.memory.summary_memory + '\n' + fragment) : fragment;\n}\n\nconst plannerTokens = 250;\nconst summaryTokens = 450;\nconst evidenceTokens = 1050;\nconst instructionTokens = 250;\nconst hardBudget = Math.min(data.ledger.max_context_tokens_per_call, plannerTokens + summaryTokens + evidenceTokens + instructionTokens);\n\nlet summary = data.memory.summary_memory || '';\nwhile (estimateTokens(summary) > summaryTokens) summary = summary.slice(Math.floor(summary.length * 0.1));\n\nconst sorted = [...cards].sort((a, b) => (utility(b) / Math.max(1, b.estimated_tokens)) - (utility(a) / Math.max(1, a.estimated_tokens)));\nconst selected = [];\nlet used = 0;\nfor (const c of sorted) {\n  const t = Math.max(12, c.estimated_tokens || 12);\n  if (used + t > evidenceTokens) continue;\n  selected.push(c);\n  used += t;\n}\n\nlet total = estimateTokens(JSON.stringify(data.memory.working_memory)) + estimateTokens(summary) + used + instructionTokens;\nwhile (total > hardBudget && selected.length) {\n  selected.sort((a, b) => utility(a) - utility(b));\n  const removed = selected.shift();\n  used -= Math.max(12, removed.estimated_tokens || 12);\n  total = estimateTokens(JSON.stringify(data.memory.working_memory)) + estimateTokens(summary) + used + instructionTokens;\n}\n\ndata.memory.summary_memory = summary;\ndata.memory.selected_evidence_cards = selected;\ndata.memory.estimated_context_tokens = total;\n\nif (data.memory.estimated_context_tokens > data.ledger.max_context_tokens_per_call) {\n  data.ledger.degrade_mode = true;\n  data.trace.degrade_mode_triggered = true;\n  data.ledger.constraint_violations.push('degrade-mode: context tokens exceed hard limit');\n}\nif (data.ledger.total_cost_usd > data.ledger.max_session_cost_usd) {\n  data.ledger.degrade_mode = true;\n  data.trace.degrade_mode_triggered = true;\n  data.ledger.constraint_violations.push('degrade-mode: cost exceeded hard limit');\n}\n\nreturn [{ json: data }];"
+      },
+      "id": "5",
+      "name": "Memory Compactor + Budget Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -150,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\nconst openaiKey = $env.OPENAI_API_KEY || '';\nconst model = $env.MODEL_RESEARCH || 'gpt-4.1';\n\nfunction estimateTokens(text) { return Math.max(1, Math.ceil(String(text || '').length / 4)); }\n\nfunction offlineSynthesis(cards, citationsRequired) {\n  const findings = cards.slice(0, 8).map(c => '- ' + c.claim_candidate + (citationsRequired ? ' [' + c.id + ']' : ''));\n  const citations = cards.slice(0, 8).map(c => '- [' + c.id + '] ' + c.source_title + ': ' + c.source_url);\n  return [\n    '## Evidence-backed Findings',\n    ...(findings.length ? findings : ['- No high-confidence findings were produced within current budget constraints.']),\n    '',\n    '## Caveats and Unknowns',\n    '- Evidence quality varies by source domain and recency.',\n    '- Budget-constrained retrieval may miss niche primary sources.',\n    '',\n    '## Citations',\n    ...citations\n  ].join('\n');\n}\n\nconst cards = data.memory.selected_evidence_cards || [];\nconst prompt = [\n  'You are a deep research synthesis assistant.',\n  'Query: ' + data.query,\n  'Subquestions: ' + JSON.stringify(data.query_breakdown || []),\n  'Summary Memory: ' + (data.memory.summary_memory || ''),\n  'Evidence: ' + JSON.stringify(cards)\n].join('\n\n');\n\nconst projectedInput = estimateTokens(prompt);\nif (projectedInput > data.ledger.max_context_tokens_per_call) {\n  data.ledger.degrade_mode = true;\n  data.trace.degrade_mode_triggered = true;\n  data.ledger.constraint_violations.push('final-synthesis: context exceeds hard limit');\n}\n\nlet answer = offlineSynthesis(cards, data.options.citations_required);\n\nif (openaiKey && !data.ledger.degrade_mode) {\n  const response = await fetch('https://api.openai.com/v1/responses', {\n    method: 'POST',\n    headers: {\n      Authorization: 'Bearer ' + openaiKey,\n      'Content-Type': 'application/json'\n    },\n    body: JSON.stringify({\n      model,\n      input: prompt,\n      max_output_tokens: 900\n    })\n  });\n\n  if (response.ok) {\n    const payload = await response.json();\n    const output = payload.output || [];\n    const parts = [];\n    for (const item of output) {\n      const content = item.content || [];\n      for (const c of content) {\n        if (c.type === 'output_text') parts.push(c.text || '');\n      }\n    }\n    if (parts.length) answer = parts.join('\n').trim();\n  }\n}\n\nconst outTokens = estimateTokens(answer);\ndata.ledger.total_tokens += projectedInput + outTokens;\ndata.ledger.total_cost_usd += (projectedInput / 1000000) * 2.0 + (outTokens / 1000000) * 8.0;\ndata.ledger.max_context_tokens_seen = Math.max(data.ledger.max_context_tokens_seen, projectedInput);\n\ndata.answer_markdown = answer;\nreturn [{ json: data }];"
+      },
+      "id": "6",
+      "name": "Final Synthesizer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nconst claimMatches = [...String(data.answer_markdown || '').matchAll(/\\[([a-f0-9]{6,12})\\]/g)].map(m => m[1]);\nconst known = new Set((data.memory.selected_evidence_cards || []).map(c => c.id));\nconst supported = claimMatches.filter(id => known.has(id));\nconst unsupported = claimMatches.filter(id => !known.has(id));\nif (unsupported.length) data.ledger.constraint_violations.push('verification: unsupported claim ids detected');\n\nconst citations = (data.memory.selected_evidence_cards || []).slice(0, 20).map(c => ({\n  claim_id: c.id,\n  url: c.source_url,\n  title: c.source_title,\n  confidence: Math.min(1, Math.max(0.2, c.retrieval_score || 0.2))\n}));\n\nconst response = {\n  answer_markdown: data.answer_markdown,\n  citations,\n  query_breakdown: data.query_breakdown || [],\n  budget_report: {\n    total_tokens: data.ledger.total_tokens,\n    total_cost_usd: Number(data.ledger.total_cost_usd.toFixed(6)),\n    max_context_tokens_seen: data.ledger.max_context_tokens_seen,\n    constraint_violations: data.ledger.constraint_violations\n  },\n  trace: data.trace\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "7",
+      "name": "Verifier + Response Formatter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        380,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{$json}}",
+        "options": {}
+      },
+      "id": "8",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        620,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Trigger": {
+      "main": [
+        [
+          {
+            "node": "Session Init",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Session Init": {
+      "main": [
+        [
+          {
+            "node": "Question Decomposer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Question Decomposer": {
+      "main": [
+        [
+          {
+            "node": "Retriever + Evidence Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retriever + Evidence Store": {
+      "main": [
+        [
+          {
+            "node": "Memory Compactor + Budget Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory Compactor + Budget Guard": {
+      "main": [
+        [
+          {
+            "node": "Final Synthesizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Synthesizer": {
+      "main": [
+        [
+          {
+            "node": "Verifier + Response Formatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verifier + Response Formatter": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false,
+  "versionId": "6b3018ea-2076-4e14-b18b-86754ecceee3",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "g3-deep-research-agent-workflow"
+}
